@@ -68,22 +68,10 @@ def panel_tags(n_samples, n_harvests, line_str, samples_df, harvests_df):
         tags.append("multi-line")
     else:
         tags.append("line-specified")
-    # Sample volume
-    if n_samples == 0:
-        tags.append("no-samples")
-    elif n_samples == 1:
-        tags.append("1-sample")
-    elif n_samples < 5:
-        tags.append("few-samples")
-    else:
-        tags.append("well-sampled")
-    # Harvest volume
-    if n_harvests == 0:
-        tags.append("no-harvest")
-    elif n_harvests == 1:
-        tags.append("single-harvest")
-    else:
-        tags.append("multi-harvest")
+    # Exact sample count (no buckets - show the actual number)
+    tags.append(f"{n_samples}-samples" if n_samples != 1 else "1-sample")
+    # Exact harvest count
+    tags.append(f"{n_harvests}-harvests" if n_harvests != 1 else "1-harvest")
     # Sample timing
     if n_samples and n_harvests:
         if (samples_df["Log Date"] < harvests_df["Log Date"].min()).sum() == 0:
@@ -146,6 +134,8 @@ def make_farm_season_figure(farm, season):
 
         # Raw sample dots
         if len(samples):
+            # Truncate notes for hover readability
+            notes_text = samples["Notes"].fillna("").astype(str).str.slice(0, 140)
             fig.add_trace(
                 go.Scatter(
                     x=samples["Log Date"],
@@ -156,10 +146,12 @@ def make_farm_season_figure(farm, season):
                     showlegend=not sample_legend_shown,
                     marker=dict(color=COLOR_SAMPLE, size=8, opacity=0.55,
                                 line=dict(color="white", width=0.6)),
+                    customdata=notes_text.values.reshape(-1, 1),
                     hovertemplate=(
                         "<b>Sample</b><br>"
                         "Date: %{x|%Y-%m-%d}<br>"
-                        "Weight: %{y:.2f} lb"
+                        "Weight: %{y:.2f} lb/ft<br>"
+                        "Notes: %{customdata[0]}"
                         "<extra></extra>"
                     ),
                 ),
@@ -192,7 +184,7 @@ def make_farm_season_figure(farm, season):
                         hovertemplate=(
                             "<b>Daily average</b><br>"
                             "Date: %{x|%Y-%m-%d}<br>"
-                            "Mean weight: %{y:.2f} lb<br>"
+                            "Mean weight: %{y:.2f} lb/ft<br>"
                             "n samples that day: %{customdata[0]}"
                             "<extra></extra>"
                         ),
@@ -207,6 +199,7 @@ def make_farm_season_figure(farm, season):
             h_yields = []
             h_weights = []
             h_lengths = []
+            h_notes = []
             no_yield_dates = []
             for _, h in harvests.iterrows():
                 if pd.notna(h["Line Length"]) and h["Line Length"] > 0 and pd.notna(h["Weight"]):
@@ -214,11 +207,13 @@ def make_farm_season_figure(farm, season):
                     h_yields.append(h["Weight"] / h["Line Length"])
                     h_weights.append(h["Weight"])
                     h_lengths.append(h["Line Length"])
+                    note = h.get("Notes", "")
+                    h_notes.append(str(note)[:140] if pd.notna(note) else "")
                 else:
                     no_yield_dates.append(h["Log Date"])
 
             if h_dates:
-                customdata = np.column_stack([h_weights, h_lengths])
+                customdata = np.column_stack([h_weights, h_lengths, h_notes])
                 fig.add_trace(
                     go.Scatter(
                         x=h_dates,
@@ -236,8 +231,9 @@ def make_farm_season_figure(farm, season):
                             "<b>Harvest</b><br>"
                             "Date: %{x|%Y-%m-%d}<br>"
                             "Yield: %{y:.2f} lb/ft<br>"
-                            "Weight: %{customdata[0]:.0f} lb<br>"
-                            "Line length: %{customdata[1]:.0f} ft"
+                            "Total weight: %{customdata[0]:.0f} lb<br>"
+                            "Line length: %{customdata[1]:.0f} ft<br>"
+                            "Notes: %{customdata[2]}"
                             "<extra></extra>"
                         ),
                     ),
@@ -253,7 +249,7 @@ def make_farm_season_figure(farm, season):
                 )
 
         fig.update_xaxes(title_text="Date", row=r, col=c, tickangle=-30)
-        fig.update_yaxes(title_text="Weight (lb or lb/ft)", row=r, col=c)
+        fig.update_yaxes(title_text="Weight (lb/ft)", row=r, col=c)
 
     # Total figure height: the plot area (computed above based on row count + gap budget)
     # plus the top margin (room for figure title + legend strip).
@@ -315,21 +311,23 @@ def farm_season_rollup_tags(farm, season):
     harvests = g[g["Log Type"] == "harvest"]
     tags = []
     # Sample volume
+    # Sample volume buckets (used for filtering -- exact count would create
+    # too many tag categories to be useful as filters)
     if len(samples) == 0:
-        tags.append("no-samples")
+        tags.append("0-samples")
     elif len(samples) == 1:
         tags.append("1-sample")
     elif len(samples) < 5:
-        tags.append("few-samples")
+        tags.append(f"{len(samples)}-samples")
     else:
-        tags.append("well-sampled")
+        tags.append("5+samples")
     # Harvest volume
     if len(harvests) == 0:
-        tags.append("no-harvest")
+        tags.append("0-harvests")
     elif len(harvests) == 1:
-        tags.append("single-harvest")
+        tags.append("1-harvest")
     else:
-        tags.append("multi-harvest")
+        tags.append("2+harvests")
     # Line specification — at least one event has a real line number?
     has_line = (g["line_key"] != "unspecified") & (~g["line_key"].str.startswith("multi"))
     if has_line.any():
@@ -340,9 +338,9 @@ def farm_season_rollup_tags(farm, season):
     species = g["species_key"][g["species_key"] != "unspecified"].unique()
     if len(species) >= 2:
         tags.append("multi-species")
-    # Has both samples and harvest (analysis-ready)
+    # Analysis-ready: has at least 1 sample AND at least 1 harvest
     if len(samples) > 0 and len(harvests) > 0:
-        tags.append("samples+harvest")
+        tags.append("has-both")  # renamed from samples+harvest for clarity
         # Sample-before-harvest?
         if (samples["Log Date"] < harvests["Log Date"].min()).sum() == 0:
             tags.append("no-pre-harvest-sample")
@@ -520,10 +518,10 @@ applyFilter();
 
 # Tag filter UI — order matters: positive/quality tags first, then problem flags
 TAG_GROUPS = [
-    ("Volume", ["well-sampled", "few-samples", "1-sample", "no-samples"]),
-    ("Harvests", ["multi-harvest", "single-harvest", "no-harvest"]),
+    ("Samples", ["5+samples", "2-samples", "3-samples", "4-samples", "1-sample", "0-samples"]),
+    ("Harvests", ["2+harvests", "1-harvest", "0-harvests"]),
     ("Line info", ["any-line-specified", "no-line-info"]),
-    ("Other", ["multi-species", "samples+harvest", "no-pre-harvest-sample"]),
+    ("Other", ["multi-species", "has-both", "no-pre-harvest-sample"]),
 ]
 tag_filter_html = '<div class="tag-filters"><strong>Filter by data-quality tag:</strong> '
 for group_label, group_tags in TAG_GROUPS:
@@ -536,17 +534,17 @@ definitions_html = """
 <details style="background:white;padding:10px 14px;border-radius:6px;margin-bottom:12px;border:1px solid #eee;font-size:13px;">
 <summary style="cursor:pointer;font-weight:600;color:#444">Tag definitions</summary>
 <div style="margin-top:8px;line-height:1.6">
-<b>Volume tags</b> (one per farm-season):
-<code>well-sampled</code> ≥5 samples · <code>few-samples</code> 2–4 · <code>1-sample</code> exactly 1 · <code>no-samples</code> 0.<br>
+<b>Sample tags</b> (filter buckets):
+<code>5+samples</code> = 5 or more samples · <code>N-samples</code> = exactly N samples (for N = 2, 3, 4) · <code>1-sample</code> = just one · <code>0-samples</code> = none.
+The per-panel subtitles show the actual exact count.<br>
 <b>Harvest tags</b>:
-<code>multi-harvest</code> ≥2 harvests · <code>single-harvest</code> exactly 1 · <code>no-harvest</code> 0.<br>
+<code>2+harvests</code> = 2 or more harvests · <code>1-harvest</code> = exactly one · <code>0-harvests</code> = none.<br>
 <b>Line info</b>:
 <code>any-line-specified</code> = at least one event mentions a specific line in its Notes;
 <code>no-line-info</code> = none do. <i>(Note: 144 of 156 farm-seasons have no line info in this dataset.)</i><br>
 <b>Other</b>:
-<code>multi-species</code> ≥2 species grown · <code>samples+harvest</code> has both kinds of events (analysis-ready) ·
-<code>no-pre-harvest-sample</code> all samples were taken on or after the first harvest event — unusual ordering, worth flagging.<br>
-Per-panel subtitles also include <code>line-specified</code> / <code>multi-line</code> / <code>no-line</code> for that specific facet.
+<code>multi-species</code> = ≥2 species grown · <code>has-both</code> = has at least 1 sample AND at least 1 harvest (analysis-ready) ·
+<code>no-pre-harvest-sample</code> = all samples were taken on or after the first harvest event (unusual ordering).<br>
 Multiple tags use AND-logic (a section must have all selected tags to show).
 </div>
 </details>
@@ -562,8 +560,9 @@ html = f"""<!doctype html>
   <div class="summary">
     {len(fs_pairs)} farm-seasons &middot; {len(sh[sh["Log Type"]=="sample"])} sample logs &middot;
     {len(sh[sh["Log Type"]=="harvest"])} harvest logs.<br>
-    <b>Hover any point</b> to see exact date and value. Each panel shows raw sample weights (green dots),
-    a daily-averaged growth curve (dark green line — pools same-day replicates), and harvest yields in lb/ft (orange squares).
+    <b>Hover any point</b> to see exact date, value, and notes. Each panel shows raw sample weights (green dots),
+    a daily-averaged growth curve (dark green line — pools same-day replicates), and harvest yields (orange squares).
+    All weights are in <b>lb/ft of line</b> — samples come from a 12-inch cut of line; harvests divide total weight by total line length.
     Harvests without a recorded line length appear as dashed vertical orange lines.
   </div>
 </header>
