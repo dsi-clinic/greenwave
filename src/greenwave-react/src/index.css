@@ -1,0 +1,11 @@
+/* These three @tailwind directives are how Tailwind's CSS gets injected.
+   You can add custom CSS below if needed, but mostly use Tailwind classes
+   directly in the JSX files. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  margin: 0;
+}
